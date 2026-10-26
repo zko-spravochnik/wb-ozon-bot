@@ -21,7 +21,8 @@ pool = None
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=45)
 
 async def get_balance(uid: int) -> int:
-    async with pool.acquire() as conn:
+    conn = pool
+    if True:
         await conn.execute(
             "INSERT INTO users(user_id, generations_left) VALUES($1, 3) "
             "ON CONFLICT(user_id) DO NOTHING", uid
@@ -87,7 +88,8 @@ async def give(message: Message):
     uid, amount = int(parts[1]), int(parts[2])
     if amount < 1:
         return await message.answer("Количество должно быть больше нуля.")
-    async with pool.acquire() as conn:
+    conn = pool
+    if True:
         await conn.execute(
             "INSERT INTO users(user_id,generations_left) VALUES($1,$2) "
             "ON CONFLICT(user_id) DO UPDATE SET generations_left="
@@ -101,7 +103,8 @@ async def handle_product(message: Message):
     if not product or product.startswith("/"):
         return
     uid = message.from_user.id
-    async with pool.acquire() as conn:
+    conn = pool
+    if True:
         async with conn.transaction():
             await conn.execute(
                 "INSERT INTO users(user_id,generations_left) VALUES($1,3) "
@@ -131,7 +134,8 @@ async def handle_product(message: Message):
         await message.answer(result[:4000])
         await message.answer(f"Осталось генераций: {updated}.")
     except Exception:
-        async with pool.acquire() as conn:
+        conn = pool
+    if True:
             await conn.execute(
                 "UPDATE users SET generations_left=generations_left+1 WHERE user_id=$1",
                 uid
