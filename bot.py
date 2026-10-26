@@ -71,7 +71,7 @@ def tariff_keyboard(user_id: int):
         [InlineKeyboardButton(text="🔥 Пачка 50 шт — 300 руб", url=get_tinkoff_link(300, user_id))],
         [InlineKeyboardButton(text="🚀 Пачка 200 шт — 800 руб", url=get_tinkoff_link(800, user_id))],
     ])
-    @router.message(Command("start"))
+@router.message(Command("start"))
 async def start_cmd(message: Message):
     balance = await get_user_balance(message.from_user.id)
     await message.answer(
