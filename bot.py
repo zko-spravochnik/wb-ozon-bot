@@ -1,14 +1,11 @@
-import os, asyncio, asyncpg, requests
+import os, asyncio, asyncpg, aiohttp
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-# ==================== НАСТРОЙКИ ДЛЯ ДВУХ СТРАН (РФ И КЗ) ====================
-RU_PHONE, RU_CARD = "77058120376", "2200700942512566"
-KZ_CARD, ADMIN_ID = "4400430344974149", 8993374736
-
+PHONE, CARD, ADMIN_ID = "77058120376", "4400430344974149", 8993374736
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp, router, db_pool = Dispatcher(), Router(), None
 dp.include_router(router)
@@ -24,29 +21,20 @@ async def get_user_balance(uid: int) -> int:
             return 3
         return row['generations_left']
 
+def get_tinkoff_link(amount: int, uid: int) -> str:
+    return f"https://tinkoff.ru{amount}&comment=ID{uid}"
+
 @router.message(Command("start"))
 async def start_cmd(message: Message):
     bal = await get_user_balance(message.from_user.id)
-    await message.answer(f"Привет, продавец! 👋\nЯ — ИИ-генератор SEO-описаний для WB и Ozon.\nТвой баланс: **{bal} генераций**.\n\nНажми кнопку ниже для старта!", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✨ Создать описание")]], resize_keyboard=True), parse_mode="Markdown")
-
-@router.message(F.text == "✨ Создать описание")
+    await message.answer(f"Привет! 👋\nЯ — ИИ-генератор SEO-описаний карточек.\nТвой баланс: **{bal} генераций**.\n\nНажми кнопку ниже для старта!", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✨ Создать описание")]], resize_keyboard=True), parse_mode="Markdown")
+    @router.message(F.text == "✨ Создать описание")
 async def start_generation(message: Message, state: FSMContext):
     if await get_user_balance(message.from_user.id) <= 0:
         uid = message.from_user.id
-        ru_lnk = f"https://tinkoff.ru{RU_PHONE}&card={RU_CARD}&amount=150&comment=ID{uid}"
-        
-        return await message.answer(
-            "🛑 **Лимит бесплатных генераций исчерпан.**\n\n"
-            "Выберите удобный способ пополнения (50 генераций — 150 руб / 750 тенге):\n\n"
-            "🇷🇺 **Для России (Т-Банк):** Нажмите кнопку ниже, оплатите форму, баланс обновится автоматически по вашему ID.\n\n"
-            "🇰🇿 **Для Казахстана (Kaspi.kz):** Переведите **750 ₸** на карту Kaspi Gold:\n`{KZ_CARD}`\n\nВ назначении/комментарии к переводу ОБЯЗАТЕЛЬНО укажите ваш `ID: {uid}` (нажмите на него, чтобы скопировать). После перевода админ моментально начислит баланс!",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="💳 Оплата из РФ (Т-Банк)", url=ru_lnk)]
-            ]), parse_mode="Markdown"
-        )
-    await message.answer("Выберите целевой маркетплейс:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Wildberries 🟣", callback_data="platform_wb")], [InlineKeyboardButton(text="Ozon 🔵", callback_data="platform_ozon")]
-    ]))
+        ru_lnk = get_tinkoff_link(150, uid)
+        return await message.answer(f"🛑 **Лимит исчерпан.**\n\nВыбери способ пополнения (50 генераций — 150 руб / 750 тг):\n\n🇷🇺 **РФ (Т-Банк):** Нажми кнопку ниже.\n\n🇰🇿 **КЗ (Kaspi):** Переведи 750 ₸ на карту:\n`{CARD}`\nВ комментарии укажи свой ID: `{uid}`", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💳 Оплата из РФ", url=ru_lnk)]]), parse_mode="Markdown")
+    await message.answer("Выберите маркетплейс:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Wildberries 🟣", callback_data="platform_wb")],[InlineKeyboardButton(text="Ozon 🔵", callback_data="platform_ozon")]]))
     await state.set_state(GeneratorStates.choosing_platform)
 
 @router.callback_query(F.data.startswith("platform_"), GeneratorStates.choosing_platform)
@@ -59,41 +47,37 @@ async def platform_chosen(callback: Message, state: FSMContext):
 @router.message(GeneratorStates.entering_name)
 async def name_entered(message: Message, state: FSMContext):
     await state.update_data(product_name=message.text)
-    await message.answer("Отлично! Теперь отправьте краткие характеристики товара или ссылку на конкурента:")
+    await message.answer("Отправьте характеристики или ссылку на конкурента:")
     await state.set_state(GeneratorStates.entering_details)
 
 @router.message(GeneratorStates.entering_details)
 async def details_entered(message: Message, state: FSMContext):
     ud = await state.get_data(); await state.clear()
-    w = await message.answer("🤖 *ИИ генерирует текст... Подождите 5 секунд...*", parse_mode="Markdown")
-    pr = f"Напиши SEO описание товара для {ud['platform']}.\nТовар: {ud['product_name']}\nИнфо: {message.text}\nВыдай строго раздельно: 1) Продающий текст (3 абзаца), 2) Блок '🔥 КЛЮЧЕВЫЕ СЛОВА ДЛЯ ПОИСКА:' (20 шт через запятую), 3) Блок '💡 РЕКОМЕНДАЦИИ ПО ХАРАКТЕРИСТИКАМ:' (3 совета)."
+    w = await message.answer("🤖 *ИИ генерирует текст... Пожалуйста, подождите...*")
+    pr = f"Напиши SEO описание для {ud['platform']}. Товар: {ud['product_name']}. Инфо: {message.text}. Выдай: 1) Текст (3 абзаца), 2) Ключевые слова (20 шт через запятую), 3) Советы (3 шт)."
     try:
-        res = requests.post("https://pollinations.ai", json={"messages": [{"role": "user", "content": pr}], "model": "openai"}, timeout=30)
+        async with aiohttp.ClientSession() as session:
+            async with session.post("https://pollinations.ai", json={"messages": [{"role": "user", "content": pr}], "model": "openai"}, timeout=30) as res:
+                text = await res.text()
         async with db_pool.acquire() as conn: await conn.execute("UPDATE users SET generations_left = generations_left - 1 WHERE user_id = $1", message.from_user.id)
         nb = await get_user_balance(message.from_user.id)
-        await w.delete(); await message.answer(f"✅ **Ваша SEO-карточка готова!**\n\n{res.text}\n\n📉 _Остаток: {nb}_", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✨ Создать описание")]], resize_keyboard=True), parse_mode="Markdown")
-    except:
-        await w.delete(); await message.answer("❌ Нейросеть временно занята. Повторите попытку.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✨ Создать описание")]], resize_keyboard=True))
+        await w.delete(); await message.answer(f"✅ **Готово!**\n\n{text}\n\n📉 Остаток: {nb}", parse_mode="Markdown")
+    except: await w.delete(); await message.answer("❌ Ошибка ИИ, повторите позже.")
 
-@router.message(Command("give"))
-async def give_balance(message: Message):
-    if message.from_user.id != ADMIN_ID: return
-    try:
-        args = message.text.split(); tu, cnt = int(args[1]), int(args[2])
-        async with db_pool.acquire() as conn: await conn.execute("INSERT INTO users (user_id, generations_left) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET generations_left = users.generations_left + $2", tu, cnt)
-        await message.answer(f"✅ Пользователю `{tu}` начислено +{cnt}!"); await bot.send_message(tu, f"🎉 Баланс пополнен! Вам начислено **+{cnt} генераций**.")
-    except: await message.answer("⚠️ Формат: `/give ID КОЛИЧЕСТВО`")
+async def start_fake_server():
+    port = int(os.getenv("PORT", 10000))
+    async def handler(r, w):
+        w.write(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nLive")
+        await w.drain(); w.close(); await w.wait_closed()
+    server = await asyncio.start_server(handler, "0.0.0.0", port)
+    async with server: await server.serve_forever()
 
 async def main():
     global db_pool
-    # Усиленная защита и принудительный SSL для стабильной связи Render -> Supabase
     db_url = os.getenv("DATABASE_URL")
-    if "sslmode" not in db_url:
-        db_url += "&sslmode=require" if "?" in db_url else "?sslmode=require"
+    if "sslmode" not in db_url: db_url += "&sslmode=require" if "?" in db_url else "?sslmode=require"
     db_pool = await asyncpg.create_pool(db_url, statement_cache_size=0, min_size=1, max_size=3)
-    
-    server = await asyncio.start_server(lambda r, w: w.write(b"HTTP/1.1 200 OK\n\nLive"), "0.0.0.0", int(os.getenv("PORT", 10000)))
-    await asyncio.gather(dp.start_polling(bot), server.serve_forever())
+    await asyncio.gather(dp.start_polling(bot), start_fake_server())
 
 if __name__ == "__main__": asyncio.run(main())
     
