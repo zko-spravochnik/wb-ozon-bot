@@ -1,11 +1,14 @@
 import os, asyncio, asyncpg, requests
 from aiogram import Bot, Dispatcher, Router, F
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 
-PHONE, CARD, ADMIN_ID = "77058120376", "2200700942512566", 8993374736
+# ==================== НАСТРОЙКИ ДЛЯ ДВУХ СТРАН (РФ И КЗ) ====================
+RU_PHONE, RU_CARD = "77058120376", "2200700942512566"
+KZ_CARD, ADMIN_ID = "4400430344974149", 8993374736
+
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp, router, db_pool = Dispatcher(), Router(), None
 dp.include_router(router)
@@ -21,9 +24,6 @@ async def get_user_balance(uid: int) -> int:
             return 3
         return row['generations_left']
 
-def get_tinkoff_link(amount: int, uid: int) -> str:
-    return f"https://tinkoff.ru{PHONE}&card={CARD}&amount={amount}&comment=ID{uid}"
-
 @router.message(Command("start"))
 async def start_cmd(message: Message):
     bal = await get_user_balance(message.from_user.id)
@@ -32,10 +32,18 @@ async def start_cmd(message: Message):
 @router.message(F.text == "✨ Создать описание")
 async def start_generation(message: Message, state: FSMContext):
     if await get_user_balance(message.from_user.id) <= 0:
-        return await message.answer("🛑 **Лимит бесплатных генераций исчерпан.**\n\nВыберите пакет для пополнения через Т-Банк:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="📦 10 шт — 100 руб", url=get_tinkoff_link(100, message.from_user.id))],
-            [InlineKeyboardButton(text="🔥 50 шт — 300 руб", url=get_tinkoff_link(300, message.from_user.id))]
-        ]), parse_mode="Markdown")
+        uid = message.from_user.id
+        ru_lnk = f"https://tinkoff.ru{RU_PHONE}&card={RU_CARD}&amount=150&comment=ID{uid}"
+        
+        return await message.answer(
+            "🛑 **Лимит бесплатных генераций исчерпан.**\n\n"
+            "Выберите удобный способ пополнения (50 генераций — 150 руб / 750 тенге):\n\n"
+            "🇷🇺 **Для России (Т-Банк):** Нажмите кнопку ниже, оплатите форму, баланс обновится автоматически по вашему ID.\n\n"
+            "🇰🇿 **Для Казахстана (Kaspi.kz):** Переведите **750 ₸** на карту Kaspi Gold:\n`{KZ_CARD}`\n\nВ назначении/комментарии к переводу ОБЯЗАТЕЛЬНО укажите ваш `ID: {uid}` (нажмите на него, чтобы скопировать). После перевода админ моментально начислит баланс!",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💳 Оплата из РФ (Т-Банк)", url=ru_lnk)]
+            ]), parse_mode="Markdown"
+        )
     await message.answer("Выберите целевой маркетплейс:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Wildberries 🟣", callback_data="platform_wb")], [InlineKeyboardButton(text="Ozon 🔵", callback_data="platform_ozon")]
     ]))
@@ -68,17 +76,22 @@ async def details_entered(message: Message, state: FSMContext):
         await w.delete(); await message.answer("❌ Нейросеть временно занята. Повторите попытку.", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✨ Создать описание")]], resize_keyboard=True))
 
 @router.message(Command("give"))
-async def give_balance(message: Message, command: CommandObject):
+async def give_balance(message: Message):
     if message.from_user.id != ADMIN_ID: return
     try:
-        args = command.args.split(); tu, cnt = int(args[0]), int(args[1])
+        args = message.text.split(); tu, cnt = int(args[1]), int(args[2])
         async with db_pool.acquire() as conn: await conn.execute("INSERT INTO users (user_id, generations_left) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET generations_left = users.generations_left + $2", tu, cnt)
         await message.answer(f"✅ Пользователю `{tu}` начислено +{cnt}!"); await bot.send_message(tu, f"🎉 Баланс пополнен! Вам начислено **+{cnt} генераций**.")
     except: await message.answer("⚠️ Формат: `/give ID КОЛИЧЕСТВО`")
 
 async def main():
     global db_pool
-    db_pool = await asyncpg.create_pool(os.getenv("DATABASE_URL"), statement_cache_size=0, min_size=1, max_size=3)
+    # Усиленная защита и принудительный SSL для стабильной связи Render -> Supabase
+    db_url = os.getenv("DATABASE_URL")
+    if "sslmode" not in db_url:
+        db_url += "&sslmode=require" if "?" in db_url else "?sslmode=require"
+    db_pool = await asyncpg.create_pool(db_url, statement_cache_size=0, min_size=1, max_size=3)
+    
     server = await asyncio.start_server(lambda r, w: w.write(b"HTTP/1.1 200 OK\n\nLive"), "0.0.0.0", int(os.getenv("PORT", 10000)))
     await asyncio.gather(dp.start_polling(bot), server.serve_forever())
 
