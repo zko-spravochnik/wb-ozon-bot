@@ -200,12 +200,31 @@ async def give_balance(message: Message, command: CommandObject):
     except Exception:
         await message.answer("⚠️ Ошибка. Неверный формат. Нужно писать так: `/give 123456789 10`")
 
-# ==================== ЗАПУСК БОТА ====================
+# ==================== ЗАПУСК БОТА С ВЕБ-ПОРТОМ ДЛЯ RENDER ====================
+async def start_fake_server():
+    # Этот сервер нужен исключительно для того, чтобы бесплатный Render думал, что запущен сайт, и не выдавал ошибку портов
+    import asyncio
+    
+    port = int(os.getenv("PORT", 10000))
+    server = await asyncio.start_server(
+        lambda r, w: w.write(b"HTTP/1.1 200 OK\n\nBot is running!"), 
+        "0.0.0.0", 
+        port
+    )
+    print(f"Виртуальный веб-сервер запущен на порту {port}")
+    async with server:
+        await server.serve_forever()
+
 async def main():
     await init_db_pool()
     print("Пул Supabase успешно поднят. Бот запускается...")
-    await dp.start_polling(bot)
+    
+    # Запускаем бота и веб-сервер одновременно в одном процессе
+    await asyncio.gather(
+        dp.start_polling(bot),
+        start_fake_server()
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
-  
+    
