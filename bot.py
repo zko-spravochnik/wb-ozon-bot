@@ -1,17 +1,12 @@
 import os, asyncio, asyncpg, aiohttp
 from aiogram import Bot, Dispatcher, Router, F
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 
 PHONE, CARD, ADMIN_ID = "77058120376", "4400430344974149", 8993374736
 bot = Bot(token=os.getenv("BOT_TOKEN"))
 dp, router, db_pool = Dispatcher(), Router(), None
 dp.include_router(router)
-
-class GeneratorStates(StatesGroup):
-    choosing_platform = State(); entering_name = State(); entering_details = State()
 
 async def get_user_balance(uid: int) -> int:
     async with db_pool.acquire() as conn:
@@ -21,48 +16,49 @@ async def get_user_balance(uid: int) -> int:
             return 3
         return row['generations_left']
 
-def get_tinkoff_link(amount: int, uid: int) -> str:
-    return f"https://tinkoff.ru{amount}&comment=ID{uid}"
-
 @router.message(Command("start"))
 async def start_cmd(message: Message):
     bal = await get_user_balance(message.from_user.id)
-    await message.answer(f"Привет! 👋\nЯ — ИИ-генератор SEO-описаний карточек.\nТвой баланс: **{bal} генераций**.\n\nНажми кнопку ниже для старта!", reply_markup=ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="✨ Создать описание")]], resize_keyboard=True), parse_mode="Markdown")
-    @router.message(F.text == "✨ Создать описание")
-async def start_generation(message: Message, state: FSMContext):
-    if await get_user_balance(message.from_user.id) <= 0:
-        uid = message.from_user.id
-        ru_lnk = get_tinkoff_link(150, uid)
-        return await message.answer(f"🛑 **Лимит исчерпан.**\n\nВыбери способ пополнения (50 генераций — 150 руб / 750 тг):\n\n🇷🇺 **РФ (Т-Банк):** Нажми кнопку ниже.\n\n🇰🇿 **КЗ (Kaspi):** Переведи 750 ₸ на карту:\n`{CARD}`\nВ комментарии укажи свой ID: `{uid}`", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💳 Оплата из РФ", url=ru_lnk)]]), parse_mode="Markdown")
-    await message.answer("Выберите маркетплейс:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Wildberries 🟣", callback_data="platform_wb")],[InlineKeyboardButton(text="Ozon 🔵", callback_data="platform_ozon")]]))
-    await state.set_state(GeneratorStates.choosing_platform)
+    await message.answer(
+        f"Привет, продавец! 👋\n\nЯ — автономный ИИ-генератор идеальных SEO-описаний карточек для Wildberries и Ozon.\n"
+        f"Твой баланс: **{bal} генераций**.\n\n"
+        f"✍️ **Просто пришли мне название товара и его краткие характеристики (или ссылку на конкурента) в одном сообщении**, и я сразу сделаю мощную карточку!",
+        parse_mode="Markdown"
+    )
 
-@router.callback_query(F.data.startswith("platform_"), GeneratorStates.choosing_platform)
-async def platform_chosen(callback: Message, state: FSMContext):
-    p = "Wildberries" if callback.data == "platform_wb" else "Ozon"
-    await state.update_data(platform=p)
-    await callback.message.edit_text(f"Выбран маркетплейс: **{p}**\n\nВведите название вашего товара:")
-    await state.set_state(GeneratorStates.entering_name)
-
-@router.message(GeneratorStates.entering_name)
-async def name_entered(message: Message, state: FSMContext):
-    await state.update_data(product_name=message.text)
-    await message.answer("Отправьте характеристики или ссылку на конкурента:")
-    await state.set_state(GeneratorStates.entering_details)
-
-@router.message(GeneratorStates.entering_details)
-async def details_entered(message: Message, state: FSMContext):
-    ud = await state.get_data(); await state.clear()
-    w = await message.answer("🤖 *ИИ генерирует текст... Пожалуйста, подождите...*")
-    pr = f"Напиши SEO описание для {ud['platform']}. Товар: {ud['product_name']}. Инфо: {message.text}. Выдай: 1) Текст (3 абзаца), 2) Ключевые слова (20 шт через запятую), 3) Советы (3 шт)."
+@router.message(F.text)
+async def generate_seo(message: Message):
+    if message.text.startswith("/"): return
+    
+    uid = message.from_user.id
+    bal = await get_user_balance(uid)
+    
+    if bal <= 0:
+        ru_lnk = f"https://tinkoff.ru{PHONE}&card=2200700942512566&amount=150&comment=ID{uid}"
+        return await message.answer(
+            f"🛑 **Лимит бесплатных генераций исчерпан.**\n\n"
+            f"Выберите удобный способ пополнения (50 генераций — 150 руб / 750 тенге):\n\n"
+            f"🇷🇺 **Для России (Т-Банк):** Нажмите кнопку ниже, оплатите форму, баланс обновится автоматически.\n\n"
+            f"🇰🇿 **Для Казахстана (Kaspi.kz):** Переведите **750 ₸** на карту Kaspi Gold:\n`{CARD}`\n\nВ комментарии к переводу ОБЯЗАТЕЛЬНО укажите ваш `ID: {uid}`. После перевода админ моментально начислит баланс!",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💳 Оплата из РФ (Т-Банк)", url=ru_lnk)]]),
+            parse_mode="Markdown"
+        )
+        
+    w = await message.answer("🤖 *ИИ собирает поисковые ключи и генерирует карточку товара... Пожалуйста, подождите 5 секунд...*", parse_mode="Markdown")
+    pr = f"Ты топовый копирайтер маркетплейсов. Напиши мощное продающее SEO описание товара на основе этих данных: {message.text}. Выдай строго раздельно: 1) Продающий текст (3 абзаца), 2) Блок '🔥 КЛЮЧЕВЫЕ СЛОВА:' (20 шт через запятую), 3) Блок '💡 СОВЕТЫ ПО ЗАПОЛНЕНИЮ:' (3 параметра)."
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post("https://pollinations.ai", json={"messages": [{"role": "user", "content": pr}], "model": "openai"}, timeout=30) as res:
                 text = await res.text()
-        async with db_pool.acquire() as conn: await conn.execute("UPDATE users SET generations_left = generations_left - 1 WHERE user_id = $1", message.from_user.id)
-        nb = await get_user_balance(message.from_user.id)
-        await w.delete(); await message.answer(f"✅ **Готово!**\n\n{text}\n\n📉 Остаток: {nb}", parse_mode="Markdown")
-    except: await w.delete(); await message.answer("❌ Ошибка ИИ, повторите позже.")
+        async with db_pool.acquire() as conn: 
+            await conn.execute("UPDATE users SET generations_left = generations_left - 1 WHERE user_id = $1", uid)
+        nb = await get_user_balance(uid)
+        await w.delete()
+        await message.answer(f"✅ **Ваша SEO-карточка успешно сгенерирована!**\n\n{text}\n\n📉 _Остаток генераций: {nb}_", parse_mode="Markdown")
+    except:
+        await w.delete()
+        await message.answer("❌ Нейросеть временно занята. Повторите попытку чуть позже.")
 
 async def start_fake_server():
     port = int(os.getenv("PORT", 10000))
